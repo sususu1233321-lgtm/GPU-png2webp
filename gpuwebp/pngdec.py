@@ -1,6 +1,6 @@
 """Fast self-contained PNG decoder: zlib (C, GIL-released) + numba defilter.
 
-Replaces Pillow for the common NAI/PIL-saved formats — 8-bit non-interlaced
+Replaces Pillow for the common AI-tool/PIL-saved formats — 8-bit non-interlaced
 RGB(A) — cutting decode from ~41ms to ~8ms per 832x1216 image.  Anything
 else (palette, 16-bit, interlaced, grey...) returns None and the caller
 falls back to Pillow.

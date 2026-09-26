@@ -1,7 +1,7 @@
 """PNG metadata extraction -> WebP XMP/EXIF/ICCP packaging with byte-exact
 round-trip verification.
 
-NAI-generated PNGs carry their prompt/parameters in tEXt chunks (Title,
+AI-generated PNGs carry their prompt/parameters in tEXt chunks (Title,
 Description, Software, Source, Generation_time, Comment) plus a pHYs
 resolution chunk.  We store every metadata chunk's RAW payload base64-encoded
 inside an XMP packet (so restoration is byte-exact for any encoding), the
