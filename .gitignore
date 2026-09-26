@@ -1,0 +1,29 @@
+# 构建产物(体积巨大)
+dist/
+build/
+build_pkg/
+installer/*.exe
+*.spec.bak
+
+# 用户私人数据 —— 绝不提交(含 NAI 提示词的真实图片)
+test_batch/
+test_in/
+test_out/
+
+# 运行时产物
+__pycache__/
+*.pyc
+*.nbi
+*.nbc
+cupy_cache/
+bin/
+
+# 临时/日志
+*.log
+*.txt.bak
+nuitka-crash-report.xml
+*.build/
+.zcode/
+vendor/
+.zcode/
+tools_prewarm.py
