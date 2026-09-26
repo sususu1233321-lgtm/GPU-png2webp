@@ -576,7 +576,7 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=0,
                     rgb[i].set(t["arr"])
                 mb_h, mb_w = (H2 + 15) // 16, (W2 + 15) // 16
                 if H2 % 16 == 0 and W2 % 16 == 0:
-                    # 16-aligned (99% of NAI output): YUV already int16 planes
+                    # 16-aligned input: YUV already int16 planes
                     # in final layout -> padding is a zero-copy no-op
                     ypl, upl, vpl = GE.rgb_to_yuv420_gpu(rgb, int16_out=True)
                     ys, us, vs = list(ypl), list(upl), list(vpl)

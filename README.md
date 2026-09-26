@@ -1,6 +1,6 @@
 # GPU压图 — 自研 GPU WebP 编码器 + 批量压缩工具
 
-把 NAI 生成的 PNG 图片(带完整 png info)压缩为 WebP:
+把带完整 png info 的 PNG 图片批量压缩为 WebP:
 **质量、分辨率基本不变,体积压到约 10~15%,图片 info 原样保留在文件里(字节级校验)。**
 
 ## 核心特点
@@ -14,7 +14,7 @@
   Generation_time/Comment 等)、`pHYs`、`eXIf`、`iCCP` 全部打包进 WebP 的
   XMP/EXIF/ICCP 块;每张输出后**逐字节回读比对**,不一致自动改用 CPU 引擎重压。
 - **alpha 通道逐位精确**:自研最小 VP8L 无损编码器(LZ77 + Huffman),
-  透明像素一个 bit 都不差;NAI 图的近全透明 alpha 从 126KB 压到 ~9KB。
+  透明像素一个 bit 都不差;近全透明 alpha 通道从 126KB 压到 ~9KB。
 - **逐张校验 + CPU 兜底**:每张输出都重新解码验证(尺寸/alpha/元数据/PSNR≥34dB),
   任何一项不过就自动用 Pillow(libwebp)按同样的元数据重压,保证结果永远可用。
 - **速度**:RTX 2080 单卡约 **5 张/秒**(832×1216);6700 张全集约 20~25 分钟。
@@ -23,7 +23,7 @@
 
 ### 图形界面(双击 `dist/GPU压图/GPU压图.exe`)
 
-1. 源文件夹默认 `L:\图片备份8\nai3_240531`,输出默认 `源文件夹\webp`(原图不动)。
+1. 源文件夹(打开后自动记住上次目录),输出默认 `源文件夹\webp`(原图不动)。
 2. 拖动质量滑条(默认 90),选择引擎(GPU/CPU)、GPU 卡、线程数。
 3. 点"开始压缩"。实时显示进度、速度、剩余时间、已节省百分比。
 4. "完成后删除原PNG"可选,勾选后结束时还有二次确认。
@@ -39,7 +39,7 @@
 ### 命令行
 
 ```
-GPU压图.exe --src L:\图片备份8\nai3_240531 --quality 90
+GPU压图.exe --src D:\我的图片 --quality 90
 可选项: --dst 输出目录   --cpu 纯CPU   --device 0 选卡
         --recursive 含子目录   --no-verify 关闭逐张校验   --workers 3
 GPU压图.exe --diag    环境自检(检查GPU/依赖)
@@ -53,7 +53,7 @@ meta = extract_from_webp(open("out.webp", "rb").read())
 chunks = restore_png_text_chunks(meta)   # [(type, raw_payload), ...] 原始字节
 ```
 
-## 实测数据(V100,300 张真实 NAI 图,批量高速模式)
+## 实测数据(V100,300 张 832×1216 真实图片,批量高速模式)
 
 | 指标 | 数值 |
 |---|---|
@@ -74,8 +74,8 @@ chunks = restore_png_text_chunks(meta)   # [(type, raw_payload), ...] 原始字�
 **GPU 波前闭环量化内核**(每宏块行一个线程,行间标志位同步,与 CPU 版
 逐位一致)→ 收尾线程池(Numba 无 GIL 熵编码)→ **子进程校验池**(把
 每张输出重新解码比对 PSNR/alpha/元数据的工作放到独立进程,绕开
-Pillow/numpy 持有 GIL 导致的线程扩展性上限)。16 整除尺寸(99%的 NAI
-图)走零拷贝快速路径,任意其它分辨率自动回退补边路径。
+Pillow/numpy 持有 GIL 导致的线程扩展性上限)。16 整除尺寸走零拷贝
+快速路径,任意其它分辨率自动回退补边路径。
 实测说明:多进程方案能把 GPU 占用拉到 90%+ 但 Windows 多 CUDA 上下文
 切换让总吞吐反而下降 10 倍,故未采用——本工具以总吞吐最高为准。
 

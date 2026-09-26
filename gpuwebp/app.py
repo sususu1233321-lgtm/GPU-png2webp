@@ -12,7 +12,7 @@ import threading
 import time
 import traceback
 
-DEFAULT_SRC = r"L:\图片备份8\nai3_240531"
+DEFAULT_SRC = ""
 
 
 def _fill_devices(box, want_default_label=True):
