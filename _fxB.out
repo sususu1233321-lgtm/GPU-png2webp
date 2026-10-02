@@ -1,0 +1,5 @@
+B: 176 files, main=80, tail dims=8
+[B] 尾部混合尺寸入padding桶: 36张→1248x1920, 36张→1536x1024, 24张→768x1472
+[B] [资源] RAM可用56.9GB (最低56.9GB) CPU负载17%
+B: done=176 failed=0 fallbacks=0 36.7/s (4.8s)
+B: 176 outputs digested

@@ -1,0 +1,27 @@
+B: 6722 files, 39 sizes, tail=1028
+[B] 尾部混合尺寸入padding桶: 89张→960x1536, 39张→1280x1920, 35张→1024x1024, 7张→1408x768, 2张→1472x1472
+[B] [资源] RAM可用56.7GB (最低56.7GB) CPU负载17%
+[B] [CPU兜底] 79928096b5321242920178576d708b09.png: 奇数尺寸 582x265
+[B] [CPU兜底] 956d7cccb263c6b29aef8161d01f84fd.png: 奇数尺寸 550x693; 注意: PSNR 30.55 < 34.0
+[B] [CPU兜底] __nahida_genshin_impact__sample-3228d1d54cb7a7b90fdbedb8b24078d1.png: 奇数尺寸 1023x1023
+[B] [CPU兜底] 2cab46f7c3824751d2ecb9bce830ec56.png: 奇数尺寸 881x1189
+[B] [CPU兜底] __aether_scaramouche_paimon_nilou_wanderer_and_6_more_genshin_impact_drawn_by_suitchi_gn4othi61__sample-a0363734faeace4c3571dd79bb2e61bf (1).png: 奇数尺寸 876x1195
+[B] [CPU兜底] __aether_scaramouche_paimon_nilou_wanderer_and_6_more_genshin_impact_drawn_by_suitchi_gn4othi61__sample-a0363734faeace4c3571dd79bb2e61bf.png: 奇数尺寸 876x1195
+[B] [资源] RAM可用48.9GB (最低48.8GB) CPU负载28%
+[B] [资源] RAM可用46.2GB (最低46.2GB) CPU负载32%
+[B] [资源] RAM可用42.6GB (最低42.6GB) CPU负载37%
+[B] [资源] RAM可用38.2GB (最低38.2GB) CPU负载44%
+[B] [资源] RAM可用35.6GB (最低35.6GB) CPU负载48%
+[B] [资源] RAM可用32.3GB (最低32.3GB) CPU负载52%
+[B] GPU输出校验未过 {katou_megumi , saenai heroine no sodatekata }.{{{sadakage,mana_(remana),hiten_h s-3589325946.png: PSNR 32.77 < 34.0，CPU兜底重压
+[B] [CPU兜底] {katou_megumi , saenai heroine no sodatekata }.{{{sadakage,mana_(remana),hiten_h s-3589325946.png: PSNR 32.77 < 34.0; 注意: PSNR 32.76 < 34.0
+[B] [资源] RAM可用29.0GB (最低29.0GB) CPU负载57%
+[B] [资源] RAM可用26.4GB (最低26.4GB) CPU负载61%
+[B] 校验异常 {{{belldandy ,aa megami-sama }}}.{{{joy division ,da_mao_banlangen,misaki_kurehi s-3836524775 (1).png: failed to read next frame
+[B] [CPU兜底] {{{belldandy ,aa megami-sama }}}.{{{joy division ,da_mao_banlangen,misaki_kurehi s-3836524775 (1).png: 校验异常 failed to read next frame; 注意: PSNR 18.07 < 34.0
+[B] [资源] RAM可用23.6GB (最低23.6GB) CPU负载65%
+[B] [资源] RAM可用21.0GB (最低21.0GB) CPU负载69%
+[B] [资源] RAM可用17.5GB (最低17.5GB) CPU负载74%
+[B] [失败] danbooru_6776076.png: 解码异常 image file is truncated (原图已复制到 未转换/)
+B: done=6722 failed=1 fallbacks=8 76.8/s (87.6s)
+B: 6720 outputs digested (expected 6722)

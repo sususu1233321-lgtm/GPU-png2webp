@@ -1,0 +1,2 @@
+round1: 602 imgs in 22.4s = 26.8/s (failed=0 fallback=6 skip=1)
+round2: 602 imgs in 18.0s = 33.4/s (failed=0 fallback=6 skip=1)

@@ -1,0 +1,45 @@
+源: D:/gpuimgtest3
+出: D:/gpu压图/_exefull2  质量: 90  引擎: GPU
+GPU绑定: Tesla V100-SXM2-16GB (device 0, PCI 0000:43:00.0)
+尾部混合尺寸入padding桶: 89张→960x1536, 39张→1280x1920, 35张→1024x1024, 7张→1408x768, 2张→1472x1472
+[资源] RAM可用56.8GB (最低56.8GB) CPU负载17%
+[跳过] 非PNG文件: AD2EB45079BFA2F2D43054852B8F3B7D.png (已复制到 未转换/)
+[CPU兜底] 79928096b5321242920178576d708b09.png: 奇数尺寸 582x265
+[CPU兜底] 956d7cccb263c6b29aef8161d01f84fd.png: 奇数尺寸 550x693; 注意: PSNR 30.55 < 34.0
+[资源] RAM可用52.1GB (最低52.1GB) CPU负载24%
+[CPU兜底] __nahida_genshin_impact__sample-3228d1d54cb7a7b90fdbedb8b24078d1.png: 奇数尺寸 1023x1023
+[CPU兜底] 2cab46f7c3824751d2ecb9bce830ec56.png: 奇数尺寸 881x1189
+[CPU兜底] __aether_scaramouche_paimon_nilou_wanderer_and_6_more_genshin_impact_drawn_by_suitchi_gn4othi61__sample-a0363734faeace4c3571dd79bb2e61bf (1).png: 奇数尺寸 876x1195
+[CPU兜底] __aether_scaramouche_paimon_nilou_wanderer_and_6_more_genshin_impact_drawn_by_suitchi_gn4othi61__sample-a0363734faeace4c3571dd79bb2e61bf.png: 奇数尺寸 876x1195
+GPU输出校验未过 {{{ lolita fashion,loli}}},{{{sadakage,da_mao_banlangen,fine_fabric_emphasis,art s-1682207499.png: PSNR 32.18 < 34.0，CPU兜底重压
+[资源] RAM可用48.6GB (最低48.6GB) CPU负载29%
+[CPU兜底] {{{ lolita fashion,loli}}},{{{sadakage,da_mao_banlangen,fine_fabric_emphasis,art s-1682207499.png: PSNR 32.18 < 34.0
+GPU输出校验未过 ComfyUI_temp_fypdm_00026_.png: PSNR 31.03 < 34.0，CPU兜底重压
+[资源] RAM可用46.6GB (最低46.6GB) CPU负载32%
+[CPU兜底] ComfyUI_temp_fypdm_00026_.png: PSNR 31.03 < 34.0
+[资源] RAM可用45.2GB (最低44.9GB) CPU负载34%
+[资源] RAM可用42.4GB (最低42.4GB) CPU负载38%
+[资源] RAM可用40.3GB (最低40.3GB) CPU负载41%
+[资源] RAM可用38.7GB (最低38.7GB) CPU负载43%
+[资源] RAM可用36.2GB (最低36.2GB) CPU负载47%
+GPU输出校验未过 {katou_megumi , saenai heroine no sodatekata }.{{{sadakage,mana_(remana),hiten_h s-3589325946.png: PSNR 32.77 < 34.0，CPU兜底重压
+[CPU兜底] {katou_megumi , saenai heroine no sodatekata }.{{{sadakage,mana_(remana),hiten_h s-3589325946.png: PSNR 32.77 < 34.0; 注意: PSNR 32.76 < 34.0
+[资源] RAM可用34.6GB (最低34.5GB) CPU负载49%
+[资源] RAM可用32.0GB (最低32.0GB) CPU负载53%
+校验异常 {{{belldandy ,aa megami-sama }}}.{{{joy division ,da_mao_banlangen,misaki_kurehi s-3836524775 (1).png: failed to read next frame
+[资源] RAM可用29.6GB (最低29.6GB) CPU负载56%
+GPU输出校验未过 {{{belldandy,aa megami-sama }}}.{{{joy division ,da_mao_banlangen,misaki_kurehit s-1761951362.png: PSNR 33.78 < 34.0，CPU兜底重压
+[CPU兜底] {{{belldandy ,aa megami-sama }}}.{{{joy division ,da_mao_banlangen,misaki_kurehi s-3836524775 (1).png: 校验异常 failed to read next frame; 注意: PSNR 18.07 < 34.0
+[CPU兜底] {{{belldandy,aa megami-sama }}}.{{{joy division ,da_mao_banlangen,misaki_kurehit s-1761951362.png: PSNR 33.78 < 34.0
+[资源] RAM可用28.1GB (最低28.0GB) CPU负载59%
+[资源] RAM可用25.4GB (最低25.4GB) CPU负载62%
+[资源] RAM可用23.0GB (最低23.0GB) CPU负载66%
+[资源] RAM可用21.5GB (最低21.5GB) CPU负载68%
+[资源] RAM可用19.2GB (最低19.2GB) CPU负载71%
+[失败] danbooru_6776076.png: 解码异常 image file is truncated (原图已复制到 未转换/)
+GPU输出校验未过 ComfyUI_temp_yzsgb_00123_.png: PSNR 33.82 < 34.0，CPU兜底重压
+[CPU兜底] ComfyUI_temp_yzsgb_00123_.png: PSNR 33.82 < 34.0
+分层校验: GPU门拦截0张, 抽样6714张(失败5张), 跳过0张 (抽样率100%, GPU门限off)
+==================================================
+成功 6726 失败 1 跳过 1 CPU兜底 12
+8629.9MB → 1073.9MB (12.4%) 耗时 98.3s
