@@ -733,6 +733,7 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
 
     def _cpp_entropy_finish(group, W2, H2, quality, y_dc, y_ac, uv_lv,
                             is_i4, i16m, uvm, i4m, sampled=None,
+                            hdr_w=None, hdr_h=None,
                             _on_done=None):
         """Batch entropy on a finish worker (keeps the GPU thread free) then
         per-image pre-encoded submits. Arrays are batch-fresh: no races."""
@@ -771,10 +772,12 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                 if stop_event is not None and stop_event.is_set():
                     return
                 p0 = int(lens[k]); tot = int(lens[n + k])
+                hw = hdr_w if hdr_w is not None else W2
+                hh = hdr_h if hdr_h is not None else H2
                 vp8 = (((1 << 4) | (p0 << 5)).to_bytes(3, "little")
                        + (0x9D012A).to_bytes(3, "big")
-                       + (W2 & 0x3FFF).to_bytes(2, "little")
-                       + (H2 & 0x3FFF).to_bytes(2, "little")
+                       + (hw & 0x3FFF).to_bytes(2, "little")
+                       + (hh & 0x3FFF).to_bytes(2, "little")
                        + outs[k * cap:k * cap + tot].tobytes())
                 if len(vp8) & 1:
                     vp8 += bytes([0])
@@ -939,9 +942,13 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     _verify_sem.acquire()
         if _entb is not None:
             _fin_sem.acquire()          # bounds pinned batch arrays (~230MB ea)
+            _hw = group[0].get("odd_wh")
             finish_ex.submit(_cpp_entropy_finish, group, W2, H2, quality,
                              y_dc, y_ac, uv_lv, is_i4, i16m, uvm, i4m,
-                             sampled, _on_done=_fin_sem.release)
+                             sampled,
+                             _hw[1] if _hw else None,
+                             _hw[0] if _hw else None,
+                             _on_done=_fin_sem.release)
             return
         _fin_sem.acquire()
         try:
@@ -1180,6 +1187,10 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
 
     def finish_gpu_pre(task, vp8, sampled=True):
         try:
+            if "odd_wh" in task:
+                _oh, _ow = task.pop("odd_wh")
+                task["arr"] = np.ascontiguousarray(
+                    task["arr"][:_oh, :_ow])
             if "_gate_fail" in task:
                 _fb_sem.acquire()
                 finish_pillow(task, task.pop("_gate_fail"))
@@ -1231,6 +1242,10 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
 
     def finish_gpu(task, modes, y_dc, y_ac, uv_lv, sampled=True):
         try:
+            if "odd_wh" in task:
+                _oh, _ow = task.pop("odd_wh")
+                task["arr"] = np.ascontiguousarray(
+                    task["arr"][:_oh, :_ow])
             if "_gate_fail" in task:
                 _fb_sem.acquire()
                 finish_pillow(task, task.pop("_gate_fail"))
@@ -1351,8 +1366,21 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                 _submit_fallback(t, f"超大尺寸 {W}x{H}")
                 progress_cb and progress_cb(stats)
                 return None
-            if H % 2 == 0 and W % 2 == 0:
-                gpu_q.put(t)
+            if H % 2 or W % 2:
+                # odd dimension: edge-replicate to even so the 4:2:0 grid
+                # exists; the VP8 frame header keeps the TRUE odd dims so
+                # the decoder crops back — output is the original odd size
+                Hp, Wp = H + (H & 1), W + (W & 1)
+                pad = np.empty((Hp, Wp, 4), arr.dtype)
+                pad[:H, :W] = arr
+                if Wp != W:
+                    pad[:, W:] = pad[:, W:W + 1]
+                if Hp != H:
+                    pad[H:] = pad[H:H + 1]
+                t["arr"] = np.ascontiguousarray(pad)
+                t["odd_wh"] = (H, W)
+            gpu_q.put(t)
+            if "odd_wh" not in t:
                 bk = _real_bucket.get((H, W))
                 if bk is not None:
                     # padded bucket member: hint when the bucket is complete
@@ -1366,8 +1394,6 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                 group_queued[key] = group_queued.get(key, 0) + 1
                 if group_queued[key] == group_total.get(key):
                     gpu_q.put(("__flush__", key))   # last of its size: flush
-            else:
-                _submit_fallback(t, f"奇数尺寸 {W}x{H}")
             return None
         except Exception as e:                          # noqa: BLE001
             with stats.lock:
@@ -1626,8 +1652,11 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             last_arrival = time.time()
             _gov.checkpoint("gpu")
             shape = t["arr"].shape[:2]
-            key = (_real_bucket.get(shape) or shape)
-                                        # bucket members share one padded grid
+            if "odd_wh" in t:
+                key = ("odd",) + shape      # true odd dims in the header
+            else:
+                key = (_real_bucket.get(shape) or shape)
+                                            # bucket members share one grid
             groups.setdefault(key, []).append(t)
             if len(groups[key]) >= batch:
                 flush_group(key)

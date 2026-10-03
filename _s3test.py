@@ -42,7 +42,7 @@ def main():
     
     t0 = time.time()
     stats = run_batch_files_fast(
-        sel, DST, base="D:/gpuimgtest3", quality=90, device=1,
+        sel, DST, base="D:/gpuimgtest3", quality=90, device=0,
         skip_existing=False, min_psnr=34.0, verify_meta=True,
         batch=64, decode_workers=10, finish_workers=10,
         log_cb=lambda s: print(f"[{MODE}]", s) if ("桶" in s or "异常" in s or "错误" in s or "资源" in s) else None,
