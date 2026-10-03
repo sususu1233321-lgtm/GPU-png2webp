@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""扩展格式输入: JPEG/BMP/TIFF/GIF/WebP/JP2 → WebP。
+"""扩展格式输入 → WebP。
 
-- 解码: imagecodecs 各格式解码器 + Pillow 回退, 统一输出 RGBA uint8
-- 元数据: JPEG 的 EXIF/ICC、WebP 源的 EXIF/XMP/ICC 块原样保留
+解码两层: imagecodecs 原生解码器(快, GIL-free)按魔数分发; 失败落
+Pillow(格式覆盖最广)。统一输出 RGBA uint8。
+
+元数据: JPEG 的 EXIF/ICC、WebP 源的 EXIF/XMP/ICC 块原样保留。
+支持的输入(常见): PNG/JPEG/WebP/BMP/TIFF/GIF/JP2/JXL/AVIF/HEIC/
+QOI/DDS/APNG + Pillow 插件覆盖的其余格式(TGA/ICO/PSD/PNM/SGI/...)。
 """
 import io
 import os
@@ -10,30 +14,44 @@ import struct
 
 import numpy as np
 
+# 采集扩展名(不含 PNG): 常见 + Pillow 生态格式
+EXTRA_EXTS = (
+    ".jpg", ".jpeg", ".jfif",
+    ".webp",
+    ".bmp", ".dib",
+    ".tif", ".tiff",
+    ".gif",
+    ".jp2", ".j2k", ".jpc",
+    ".jxl",
+    ".avif", ".heic", ".heif", ".hif",
+    ".qoi",
+    ".dds",
+    ".apng",
+    ".tga", ".icb", ".vda", ".vst",
+    ".ico", ".cur",
+    ".psd", ".psb",
+    ".ppm", ".pgm", ".pbm", ".pnm", ".pam",
+    ".sgi", ".rgb", ".rgba", ".bw", ".int", ".inta",
+    ".pcx", ".dcx",
+    ".im", ".xpm", ".xbm",
+    ".pic", ".pixar",
+    ".msp", ".wal", ".mpt", ".tex",
+    ".fit", ".fits", ".fts",
+)
+
 
 def decode_any(data):
-    """任意支持格式 → RGBA (H, W, 4) uint8; 失败抛异常。"""
+    """任意支持格式 -> RGBA (H, W, 4) uint8; 失败抛异常。"""
     import imagecodecs
     from PIL import Image
     try:
-        if data[:3] == b"\xff\xd8\xff":
-            arr = imagecodecs.jpeg_decode(data)
-        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-            arr = imagecodecs.webp_decode(data)
-        elif data[:2] == b"BM":
-            arr = imagecodecs.bmp_decode(data)
-        elif data[:4] in (b"II*\x00", b"MM\x00*"):
-            arr = imagecodecs.tiff_decode(data)
-        elif data[:6] in (b"GIF87a", b"GIF89a"):
-            arr = imagecodecs.gif_decode(data)
-            if arr.ndim == 4:            # 动图: 取第一帧
-                arr = arr[0]
-        elif data[:4] == b"\xff\x4f\xff\x51":
-            arr = imagecodecs.jpeg2k_decode(data)
-        else:
-            raise ValueError("未知格式")
+        arr = _decode_native(imagecodecs, data)
+        if arr is None:
+            raise ValueError("unknown magic")
         if arr.ndim == 2:
             arr = np.stack([arr] * 3, -1)
+        if arr.ndim == 3 and arr.shape[-1] == 1:
+            arr = np.concatenate([arr] * 3, -1)
         if arr.dtype != np.uint8:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         if arr.shape[-1] == 3:
@@ -45,8 +63,49 @@ def decode_any(data):
         if getattr(img, "is_animated", False):
             img.seek(0)
         if img.mode not in ("RGB", "RGBA"):
-            img = img.convert("RGBA")
-        return np.ascontiguousarray(np.asarray(img))
+            img = img.convert(
+                "RGBA" if "A" in img.getbands()
+                or "transparency" in img.info else "RGB")
+        arr = np.asarray(img)
+        if arr.ndim == 2:
+            arr = np.stack([arr] * 3, -1)
+        if arr.shape[-1] == 3:
+            arr = np.concatenate(
+                [arr, np.full(arr.shape[:2] + (1,), 255, np.uint8)], -1)
+        return np.ascontiguousarray(arr[..., :4])
+
+
+def _decode_native(ic, d):
+    """魔数 -> imagecodecs 解码器; 未知返回 None(交 Pillow)。"""
+    if d[:3] == b"\xff\xd8\xff":
+        return ic.jpeg_decode(d)
+    if d[:4] == b"RIFF" and d[8:12] == b"WEBP":
+        return ic.webp_decode(d)
+    if d[:2] == b"BM":
+        return ic.bmp_decode(d)
+    if d[:4] in (b"II*\x00", b"MM\x00*"):
+        return ic.tiff_decode(d)
+    if d[:6] in (b"GIF87a", b"GIF89a"):
+        a = ic.gif_decode(d)
+        return a[0] if a.ndim == 4 else a
+    if d[:4] == b"\xff\x4f\xff\x51":
+        return ic.jpeg2k_decode(d)
+    if d[:4] == b"II\xbc\x01":                      # JXL raw codestream
+        return ic.jpegxl_decode(d)
+    if len(d) > 12 and d[12:16] == b"JXL ":         # JXL container
+        return ic.jpegxl_decode(d)
+    if d[4:8] == b"ftyp":                            # AVIF/HEIC (ISOBMFF)
+        try:
+            return ic.avif_decode(d)
+        except Exception:
+            return ic.heif_decode(d)
+    if d[:4] == b"DDS ":
+        return ic.dds_decode(d)
+    if d[:3] == b"QOI":
+        return ic.qoi_decode(d)
+    if d[:8] == b"\x89PNG\r\n\x1a\n":
+        return ic.png_decode(d)
+    return None
 
 
 def _webp_meta(data):
@@ -101,15 +160,13 @@ def collect_images(src, recursive):
     """所有支持格式的输入文件(含 PNG)。"""
     from .pipeline import collect_pngs
     extra = []
-    exts = (".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
-            ".webp", ".gif", ".jp2")
     if recursive:
         for root, _dirs, files in os.walk(src):
             for fn in files:
-                if fn.lower().endswith(exts):
+                if fn.lower().endswith(EXTRA_EXTS):
                     extra.append(os.path.join(root, fn))
     else:
         for fn in os.listdir(src):
-            if fn.lower().endswith(exts):
+            if fn.lower().endswith(EXTRA_EXTS):
                 extra.append(os.path.join(src, fn))
     return sorted(collect_pngs(src, recursive) + extra)
