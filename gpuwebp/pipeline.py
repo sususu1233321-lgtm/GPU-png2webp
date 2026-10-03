@@ -273,7 +273,8 @@ def run_batch(src, dst, quality=90, engine="gpu", device=1, recursive=False,
                               stop_event=stop_event, max_cores=max_cores)
     stats = BatchStats()
     log = log_cb or (lambda s: None)
-    files = collect_pngs(src, recursive)
+    from .extfmt import collect_images
+    files = collect_images(src, recursive)
     stats.total = len(files)
     stats.start = time.time()
     if not files:
@@ -349,7 +350,8 @@ def run_batch_fast(src, dst, quality=90, device=1, recursive=False,
                    batch=16, decode_workers=4, finish_workers=8,
                    progress_cb=None, log_cb=None, stop_event=None,
                    max_cores=None):
-    files = collect_pngs(src, recursive)
+    from .extfmt import collect_images
+    files = collect_images(src, recursive)
     return run_batch_files_fast(files, dst, base=src, quality=quality, device=device,
                                 skip_existing=skip_existing, min_psnr=min_psnr,
                                 verify_meta=verify_meta, batch=batch,
@@ -1305,12 +1307,46 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             log(f"GPU编码失败 {task['rel']}: {e}")
             finish_pillow(task, f"GPU编码异常 {e}")
 
+    def _route_decoded(t, path, rel, out_path, H, W, stats, progress_cb,
+                        log):
+        """Shared post-decode routing: size cap, odd-edge padding, queue."""
+        arr = t["arr"]
+        if H * W > 24_000_000:
+            _submit_fallback(t, f"超大尺寸 {W}x{H}")
+            progress_cb and progress_cb(stats)
+            return
+        if H % 2 or W % 2:
+            Hp, Wp = H + (H & 1), W + (W & 1)
+            pad = np.empty((Hp, Wp, 4), arr.dtype)
+            pad[:H, :W] = arr
+            if Wp != W:
+                pad[:, W:] = pad[:, W:W + 1]
+            if Hp != H:
+                pad[H:] = pad[H:H + 1]
+            t["arr"] = np.ascontiguousarray(pad)
+            t["odd_wh"] = (H, W)
+        gpu_q.put(t)
+        if "odd_wh" not in t:
+            bk = _real_bucket.get((H, W))
+            if bk is not None:
+                with stats.lock:
+                    _bucket_queued[bk] += 1
+                    _last = (_bucket_queued[bk] == _bucket_total.get(bk, -1))
+                if _last:
+                    gpu_q.put(("__flush__", bk))
+            key = ((H + 15) // 16, (W + 15) // 16)
+            group_queued[key] = group_queued.get(key, 0) + 1
+            if group_queued[key] == group_total.get(key):
+                gpu_q.put(("__flush__", key))
+        return
+
     def decode_one(path):
         if stop_event is not None and stop_event.is_set():
             return None
         rel = os.path.relpath(path, base)
         out_path = os.path.join(dst, os.path.splitext(rel)[0] + ".webp")
-        if skip_existing and os.path.exists(out_path):
+        if skip_existing and os.path.exists(out_path)                 and os.path.abspath(out_path) != os.path.abspath(path):
+            # webp→webp 同目录压缩时输出就是输入本身, 不能跳过
             with stats.lock:
                 stats.skipped += 1
             progress_cb and progress_cb(stats)
@@ -1319,11 +1355,15 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             _gov.checkpoint("decode")
             png_data = open(path, "rb").read()
             if png_data[:8] != b"\x89PNG\r\n\x1a\n":
-                with stats.lock:
-                    stats.skipped += 1
-                _park_failed(path, dst, log)
-                log(f"[跳过] 非PNG文件: {rel} (已复制到 未转换/)")
-                progress_cb and progress_cb(stats)
+                from .extfmt import decode_any_meta
+                arr, _xmeta = decode_any_meta(png_data)
+                meta = _xmeta or None
+                t = dict(rel=rel, out=out_path, png=png_data,
+                         arr=arr, src=path, meta=meta,
+                         size=len(png_data))
+                H, W = arr.shape[:2]
+                _route_decoded(t, path, rel, out_path, H, W,
+                               stats, progress_cb, log)
                 return None
             # decode: imagecodecs (libpng, GIL-free) -> Pillow fallback;
             # metadata: C++ chunk scanner (the Python parser slices every
@@ -1359,41 +1399,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             H, W = arr.shape[:2]
             with stats.lock:
                 stats.cur_name = os.path.basename(path)
-            if H * W > 24_000_000:
-                # >24MP: batch buffers would need GBs and the corpus scan
-                # found fabricated headers claiming billions of pixels;
-                # Pillow handles these sequentially without the pipeline
-                _submit_fallback(t, f"超大尺寸 {W}x{H}")
-                progress_cb and progress_cb(stats)
-                return None
-            if H % 2 or W % 2:
-                # odd dimension: edge-replicate to even so the 4:2:0 grid
-                # exists; the VP8 frame header keeps the TRUE odd dims so
-                # the decoder crops back — output is the original odd size
-                Hp, Wp = H + (H & 1), W + (W & 1)
-                pad = np.empty((Hp, Wp, 4), arr.dtype)
-                pad[:H, :W] = arr
-                if Wp != W:
-                    pad[:, W:] = pad[:, W:W + 1]
-                if Hp != H:
-                    pad[H:] = pad[H:H + 1]
-                t["arr"] = np.ascontiguousarray(pad)
-                t["odd_wh"] = (H, W)
-            gpu_q.put(t)
-            if "odd_wh" not in t:
-                bk = _real_bucket.get((H, W))
-                if bk is not None:
-                    # padded bucket member: hint when the bucket is complete
-                    with stats.lock:
-                        _bucket_queued[bk] += 1
-                        _last = (_bucket_queued[bk]
-                                 == _bucket_total.get(bk, -1))
-                    if _last:
-                        gpu_q.put(("__flush__", bk))
-                key = ((H + 15) // 16, (W + 15) // 16)
-                group_queued[key] = group_queued.get(key, 0) + 1
-                if group_queued[key] == group_total.get(key):
-                    gpu_q.put(("__flush__", key))   # last of its size: flush
+            _route_decoded(t, path, rel, out_path, H, W,
+                           stats, progress_cb, log)
             return None
         except Exception as e:                          # noqa: BLE001
             with stats.lock:
@@ -1743,7 +1750,8 @@ def run_batch_multiproc(src, dst, quality=90, device=1, nproc=0,
     import tempfile
 
     log = log_cb or (lambda s: None)
-    files = collect_pngs(src, recursive)
+    from .extfmt import collect_images
+    files = collect_images(src, recursive)
     stats = BatchStats()
     stats.total = len(files)
     stats.start = time.time()
