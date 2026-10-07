@@ -47,3 +47,5 @@ _*.md
 vendor/*.zip
 *.out
 build_p.txt
+test_in/
+*.obj
