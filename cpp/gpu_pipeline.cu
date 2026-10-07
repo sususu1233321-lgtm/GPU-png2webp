@@ -231,6 +231,29 @@ struct DevCache {
 static DevCache g;          // kept for the sync wrappers
 static DevCache S2[2];       // slot buffer sets for the pipeline
 
+// crash tracer: log the faulting thread + address on access violations
+static LONG WINAPI pp_crash_handler(PEXCEPTION_POINTERS ep) {
+    if (ep->ExceptionRecord->ExceptionCode == 0xC0000005) {
+        HMODULE m = NULL;
+        char nm[MAX_PATH] = "?";
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                           | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)ep->ContextRecord->Rip, &m);
+        if (m) GetModuleFileNameA(m, nm, MAX_PATH);
+        fprintf(stderr, "[CRASH] tid=%lu rip=%p (mod %s +0x%llx) addr=%p\n",
+                GetCurrentThreadId(), (void*)ep->ContextRecord->Rip, nm,
+                m ? (unsigned long long)((char*)ep->ContextRecord->Rip
+                                         - (char*)m) : 0ULL,
+                ep->ExceptionRecord->ExceptionInformation[1]);
+        fflush(stderr);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+static bool _veh_installed = [] {
+    AddVectoredExceptionHandler(1, pp_crash_handler);
+    return true;
+}();
+
 static int g_device = 0;
 static bool g_dev_fixed = false;   // set before first CUDA call -> sticky
 
@@ -706,6 +729,11 @@ static int stage1_v2(Req3* r, struct DevCache* bs) {
         CHECK_CUDA(cudaGetLastError());
         if (getenv("PAD_DBG")) { fprintf(stderr, "s1 staged n=%d padW=%d raw=%zu" "\n", n, r->W, raw_need); fflush(stderr); }
     } else if (r->png && r->padded) {
+        if (r->imgs.empty()) {
+            fprintf(stderr, "[W1] DOUBLE-STAGE1 rid=%d pngpad!\n", r->id);
+            fflush(stderr);
+            return -9;
+        }
         // padded png batch: per-image real (Wr, Hr) defiltered straight
         // into one shared zero-padded (Hp, Wp) grid; real-MB outputs are
         // gathered to packed buffers by stage23 exactly like the RGBA
@@ -820,6 +848,11 @@ static int stage1_v2(Req3* r, struct DevCache* bs) {
         }
         CHECK_CUDA(cudaGetLastError());
     } else if (r->png) {
+        if (r->imgs.empty()) {
+            fprintf(stderr, "[W1] DOUBLE-STAGE1 rid=%d png!\n", r->id);
+            fflush(stderr);
+            return -9;
+        }
         // per-image zlib streams -> GPU inflate -> filter-prefixed rows in
         // fraw -> defilter -> rgba, then the shared chain below. Only
         // compressed bytes cross the PCIe (~1.3MB vs 4MB RGBA per image)
@@ -1135,6 +1168,7 @@ static int stage23_v2(Req3* r, struct DevCache* bs) {
     if (r->png) {
         // per-image inflate status + decoded RGBA (alpha encode and the
         // verify reference both need the pixels on the host)
+        if (getenv("PPDBG2")) { fprintf(stderr, "[W2] png d2h begin n=%d padded=%d\n", n, r->padded); fflush(stderr); } if (getenv("PPSLEEP1")) Sleep(atoi(getenv("PPSLEEP1")));
         CHECK_CUDA(cudaMemcpyAsync(r->h_img_err, bs->dimgerr.p,
                                    (size_t)n * sizeof(int),
                                    cudaMemcpyDeviceToHost, bs->stream));
@@ -1145,14 +1179,18 @@ static int stage23_v2(Req3* r, struct DevCache* bs) {
         }
     }
     cudaStreamSynchronize(bs->stream);
+    if (getenv("PPDBG2")) { fprintf(stderr, "[W2] pre-rgba-copy\n"); fflush(stderr); } if (getenv("PPSLEEP2")) Sleep(atoi(getenv("PPSLEEP2")));
     if (r->png && r->h_rgba) {
         size_t rgb_b = (size_t)n * H * W * 4;
         memcpy(r->h_rgba, bs->pin_in.p, rgb_b);
     }
+    if (getenv("PPDBG2")) { fprintf(stderr, "[W2] rgba copied %lld\n", (long long)((size_t)n * H * W * 4)); fflush(stderr); }
     if (_ps) fprintf(stderr, "PST stage23闭环+D2H=%lldms\n", _hnow() - _ps0);
 
     // ---- padded path: gather real MB rows into the packed caller buffers ----
     if (r->padded) {
+        if (getenv("PPDBG2")) { fprintf(stderr, "[W2] gather begin n=%d\n", r->n); fflush(stderr); } if (getenv("PPSLEEP3")) Sleep(atoi(getenv("PPSLEEP3")));
+
         if (getenv("PAD_DBG")) { fprintf(stderr, "s23 gather n=%d" "\n", r->n); fflush(stderr); }
         int mb_w_p = r->W / 16;
         size_t off = 0;   // packed dst base = sum of preceding images' real MBs
@@ -1190,6 +1228,9 @@ static int stage23_v2(Req3* r, struct DevCache* bs) {
         free(r->y_dc); free(r->y_ac); free(r->uv_lv);
         free(r->is_i4); free(r->i16m); free(r->uvm); free(r->i4m);
         r->own_out = 0;
+        if (getenv("PPDBG2")) { fprintf(stderr, "[W2] gather done\n"); fflush(stderr); } if (getenv("PPSLEEP4")) Sleep(atoi(getenv("PPSLEEP4")));
+
+
     }
 
     return 0;
@@ -1374,6 +1415,18 @@ static void w2_loop() {
     }
 }
 
+// single shared worker-pair starter: every submit entry MUST use THIS
+// once_flag. Per-export static once_flags each spawned their own W1/W2
+// pair, and two pops of the same g3_q request double-ran stage1 (crash).
+static void ensure_async_workers() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        g3_run = true;
+        std::thread(w1_loop).detach();
+        std::thread(w2_loop).detach();
+    });
+}
+
 static int submit_impl(void* const* img_ptrs, int n, int W, int H,
                        int quality, int filtered, int bpp,
                        unsigned char* alpha_flags,
@@ -1389,14 +1442,7 @@ static int submit_impl(void* const* img_ptrs, int n, int W, int H,
     if (padded && (W_real % 16 || H_real % 16 || W_real > W || H_real > H))
         return -4;
     init_slot_streams();
-    {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            g3_run = true;
-            std::thread(w1_loop).detach();
-            std::thread(w2_loop).detach();
-        });
-    }
+    ensure_async_workers();
     std::unique_ptr<Req3> up(new Req3());
     Req3* r = up.get();
     r->id = ++g3_next_id;
@@ -1550,14 +1596,7 @@ int submit_batch_png2(void* const* idat_ptrs, const int* idat_lens, int n,
     if (H % 16 || W % 16) return -2;
     if (bpp != 3 && bpp != 4) return -5;
     init_slot_streams();
-    {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            g3_run = true;
-            std::thread(w1_loop).detach();
-            std::thread(w2_loop).detach();
-        });
-    }
+    ensure_async_workers();
     std::unique_ptr<Req3> up(new Req3());
     Req3* r = up.get();
     r->id = ++g3_next_id;
@@ -1605,14 +1644,7 @@ int submit_batch_pngv(void* const* idat_ptrs, const int* idat_lens, int n,
     else if (bd == 16) legal = (ct == 0 || ct == 2 || ct == 4 || ct == 6);
     if (!legal || inter < 0 || inter > 1) return -5;
     init_slot_streams();
-    {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            g3_run = true;
-            std::thread(w1_loop).detach();
-            std::thread(w2_loop).detach();
-        });
-    }
+    ensure_async_workers();
     std::unique_ptr<Req3> up(new Req3());
     Req3* r = up.get();
     r->id = ++g3_next_id;
@@ -1675,14 +1707,7 @@ int submit_batch_pngv_padded2(void* const* idat_ptrs, const int* idat_lens,
     else if (bd == 16) legal = (ct == 0 || ct == 2 || ct == 4 || ct == 6);
     if (!legal || inter < 0 || inter > 1) return -5;
     init_slot_streams();
-    {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            g3_run = true;
-            std::thread(w1_loop).detach();
-            std::thread(w2_loop).detach();
-        });
-    }
+    ensure_async_workers();
     std::unique_ptr<Req3> up(new Req3());
     Req3* r = up.get();
     r->id = ++g3_next_id;

@@ -705,6 +705,25 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     except AttributeError:
                         pass
                     try:
+                        # padded mixed-size variant of the GPU PNG decoder
+                        _cpp.submit_batch_pngv_padded2.restype = (
+                            ctypes.c_int)
+                        _cpp.submit_batch_pngv_padded2.argtypes = (
+                            [ctypes.c_void_p, ctypes.c_void_p,
+                             ctypes.c_int,
+                             ctypes.POINTER(ctypes.c_int),
+                             ctypes.POINTER(ctypes.c_int),
+                             ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                             ctypes.c_int, ctypes.c_int, ctypes.c_int]
+                            + [ctypes.c_void_p] * 7
+                            + [ctypes.c_void_p, ctypes.c_void_p,
+                               ctypes.c_void_p]
+                            + [ctypes.c_void_p, ctypes.c_int,
+                               ctypes.c_void_p, ctypes.c_int,
+                               ctypes.c_int])
+                    except AttributeError:
+                        pass
+                    try:
                         # GPU PNG decode: zlib streams in, decoded RGBA back
                         # with the batch result (all bit depths / colour
                         # types / interlace / tRNS)
@@ -836,7 +855,10 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                           # full batch never waits on the previous drain
 
     def _drain_pend(block):
-        # dispatch completed GPU batches (FIFO) to the entropy/finish path
+        # dispatch completed GPU batches to the entropy/finish path.
+        # poll returns completions in FINISH order, which differs from
+        # submission order once mixed exact/padded batches coexist (their
+        # stage1 durations differ) -- match by rid, never blind-pop FIFO
         while _pend:
             err = ctypes.c_int()
             _tw0 = time.time()
@@ -845,9 +867,18 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                 _gpuline("poll", 0, 0, 0, _tw0)
             if got == 0:
                 return
+            ent = None
+            for e in _pend:
+                if e[0] == got:
+                    ent = e
+                    break
+            if ent is None:
+                # stale/duplicate completion for an already-drained entry
+                continue
+            _pend.remove(ent)
             (rid, group, W2, H2, y_dc, y_ac, uv_lv,
              is_i4, i16m, uvm, i4m, padded, sse, png_rgba,
-             png_ierr) = _pend.pop(0)
+             png_ierr) = ent
             if err.value != 0:
                 log(f"C++ GPU管线批错误 {err.value}，CPU兜底")
                 for t in group:
@@ -984,6 +1015,54 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             raise RuntimeError(f"C++ GPU管线提交失败 {rid}")
         _pend.append((rid, group, W2, H2, y_dc, y_ac, uv_lv,
                       is_i4, i16m, uvm, i4m, False, sse, rgba, ierr))
+        _drain_pend(False)
+
+    def _padded_flush_png(group, Hp, Wp):
+        """Mixed-size GPU-decoded batch on one shared padded grid: many
+        concurrent inflate streams regardless of individual image sizes."""
+        n = len(group)
+        tot = sum((t["ihdr"][0] // 16) * (t["ihdr"][1] // 16) for t in group)
+        y_dc = np.empty(tot * 16, np.int16)
+        y_ac = np.empty(tot * 256, np.int16)
+        uv_lv = np.empty(tot * 128, np.int16)
+        is_i4 = np.empty(tot, np.uint8)
+        i16m = np.empty(tot, np.uint8)
+        uvm = np.empty(tot, np.uint8)
+        i4m = np.empty(tot * 16, np.uint8)
+        _ptr = lambda a: a.ctypes.data_as(ctypes.c_void_p)  # noqa: E731
+        P = ctypes.c_void_p
+        while len(_pend) >= _PEND_MAX:
+            _drain_pend(True)
+        _dev_low_purge()
+        ipa = (P * n)(*[ctypes.cast(ctypes.c_char_p(t["idat"]), P)
+                        for t in group])
+        lens = (ctypes.c_int * n)(*[len(t["idat"]) for t in group])
+        wr = (ctypes.c_int * n)(*[t["ihdr"][1] for t in group])
+        hr = (ctypes.c_int * n)(*[t["ihdr"][0] for t in group])
+        h0, w0, bd, ct, inter = group[0]["ihdr"]
+        plte = group[0]["plte"]
+        trns256 = group[0]["trns256"]
+        sse = np.empty(n * 3, np.int64)
+        rgba = np.empty(n * Hp * Wp * 4, np.uint8)
+        ierr = np.empty(n, np.int32)
+        if os.environ.get("PPDBG2A"):
+            print(f"[PP2] submit n={n} grid={Wp}x{Hp} bd={bd} ct={ct}",
+                  flush=True)
+        rid = _cpp.submit_batch_pngv_padded2(
+            ipa, lens, n, wr, hr, Wp, Hp, bd, ct, inter, quality,
+            _ptr(y_dc), _ptr(y_ac), _ptr(uv_lv),
+            _ptr(is_i4), _ptr(i16m), _ptr(uvm), _ptr(i4m),
+            _ptr(sse), _ptr(ierr), _ptr(rgba),
+            _ptr(plte) if plte else P(0), len(plte) if plte else 0,
+            _ptr(trns256) if trns256 else P(0),
+            len(trns256) if trns256 else 0,
+            group[0]["trnsmode"])
+        if rid <= 0:
+            raise RuntimeError(f"png padded提交失败 {rid}")
+        _pend.append((rid, group, Wp, Hp, y_dc, y_ac, uv_lv,
+                      is_i4, i16m, uvm, i4m, True, sse, rgba, ierr))
+        if os.environ.get("PPDBG2B"):
+            print(f"[PP2] queued rid={rid}", flush=True)
         _drain_pend(False)
 
     def _dispatch_batch(group, W2, H2, y_dc, y_ac, uv_lv,
@@ -1139,9 +1218,24 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
     def _dispatch_padded(group, y_dc, y_ac, uv_lv, is_i4, i16m, uvm, i4m,
                          sse=None, png_rgba=None, png_ierr=None):
         """Split packed per-real-MB outputs into consecutive same-size runs
-        and feed each through the uniform-dims dispatch/entropy path.
-        (PNG tasks never enter padded groups; the params exist so the
-        drain call sites stay uniform.)"""
+        and feed each through the uniform-dims dispatch/entropy path."""
+        if png_rgba is not None:
+            if os.environ.get("PPDBG2C"):
+                print(f"[PP2] dispatch n={len(group)}", flush=True)
+            Hp = group and max(t["padgrid"][1] for t in group)
+            Wp = group and max(t["padgrid"][2] for t in group)
+            one = Hp * Wp * 4
+            for i, t in enumerate(group):
+                h_r, w_r = t["ihdr"][0], t["ihdr"][1]
+                if png_ierr is not None and png_ierr[i] != 0:
+                    try:
+                        t["arr"] = _decode_png_cpu(t["png"])
+                    except Exception:              # noqa: BLE001
+                        t["arr"] = np.zeros((h_r, w_r, 4), np.uint8)
+                    t["_gate_fail"] = f"GPU解码错误 {png_ierr[i]}"
+                    continue
+                t["arr"] = png_rgba[i * one:(i + 1) * one].reshape(
+                    Hp, Wp, 4)[:h_r, :w_r].copy()
         offs = [0]
         for t in group:
             s = t["arr"].shape[:2]
@@ -1580,10 +1674,23 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     progress_cb and progress_cb(stats)
                     return None
                 gpu_q.put(t)
-                key = ((h + 15) // 16, (w + 15) // 16)
-                group_queued[key] = group_queued.get(key, 0) + 1
-                if group_queued[key] == group_total.get(key):
-                    gpu_q.put(("__flush__", ("pngany", h, w)))
+                bk = _real_bucket.get((h, w))
+                if bk is not None:
+                    # bucket member: mixed-size padded batch keeps the
+                    # stream count high for the latency-bound inflate
+                    t["padgrid"] = bk
+                    with stats.lock:
+                        _bucket_queued[bk] += 1
+                        last = (_bucket_queued[bk]
+                                == _bucket_total.get(bk, -1))
+                    if last:
+                        gpu_q.put(("__flush__",
+                                   ("pnganybucket", bk[1], bk[2])))
+                else:
+                    key = ((h + 15) // 16, (w + 15) // 16)
+                    group_queued[key] = group_queued.get(key, 0) + 1
+                    if group_queued[key] == group_total.get(key):
+                        gpu_q.put(("__flush__", ("pngany", h, w)))
                 return None
             # decode: imagecodecs (libpng, GIL-free) -> Pillow fallback;
             # metadata: C++ chunk scanner (the Python parser slices every
@@ -1725,6 +1832,17 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             return
         if isinstance(key, tuple) and key and key[0] == "__pad__":
             _padded_flush(group, key[1], key[2])
+            return
+        if (isinstance(key, tuple) and key and key[0] == "pngpad"):
+            Hp2, Wp2 = key[1], key[2]
+            try:
+                _padded_flush_png(group, Hp2, Wp2)
+            except MemoryError:
+                raise
+            except Exception as e:                  # noqa: BLE001
+                log(f"GPU解码桶批异常({len(group)}张): {e}")
+                for t in group:
+                    _submit_fallback(t, f"GPU解码桶批异常 {e}")
             return
         if isinstance(key, tuple) and key and key[0] == "png":
             H2, W2 = key[1], key[2]
@@ -1872,6 +1990,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
     # fire mid-run and the GPU sat idle between partial-group flushes.
     _em = os.environ.get("GPU_EAGERMIN")
     _eager_min = int(_em) if _em is not None else 24
+    _pb = os.environ.get("PNG_BATCH")
+    _png_batch = int(_pb) if _pb is not None else 192
 
     def _eager_flush():
         """Flush the biggest partial group when the GPU would idle anyway."""
@@ -1911,6 +2031,14 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                         if (k and k[0] == "png" and k[1] == fk[1]
                                 and k[2] == fk[2]):
                             flush_group(k)
+                elif (isinstance(fk, tuple) and fk
+                        and fk[0] == "pnganybucket"):
+                    # fk = ("pnganybucket", Hp, Wp); group key =
+                    # ("pngpad", Hp, Wp, bd, ct, inter) -- compare k[1]/k[2]
+                    for k in list(groups):
+                        if (k and k[0] == "pngpad" and k[1] == fk[1]
+                                and k[2] == fk[2]):
+                            flush_group(k)
                 else:
                     flush_group(fk)
                 last_arrival = time.time()
@@ -1919,9 +2047,14 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             _gov.checkpoint("gpu")
             if "idat" in t:
                 # GPU-decoded PNG task: group by full geometry (size groups
-                # can mix bit depths / colour types)
+                # can mix bit depths / colour types); bucket members share
+                # one padded grid keyed on (Hp, Wp, variant)
                 h, w, bd, ct, inter = t["ihdr"]
-                key = ("png", h, w, bd, ct, inter)
+                pg = t.get("padgrid")
+                if pg is not None:
+                    key = ("pngpad", pg[1], pg[2], bd, ct, inter)
+                else:
+                    key = ("png", h, w, bd, ct, inter)
             else:
                 shape = t["arr"].shape[:2]
                 if "odd_wh" in t:
@@ -1930,7 +2063,11 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     key = (_real_bucket.get(shape) or shape)
                                                 # bucket members share one grid
             groups.setdefault(key, []).append(t)
-            if len(groups[key]) >= batch:
+            # PNG batches want MANY concurrent streams on the GPU: the
+            # inflate kernel is latency-bound per stream, aggregate scales
+            # with streams (measured 89 -> 304MB/s going 64 -> 256)
+            _cap = _png_batch if "idat" in t else batch
+            if len(groups[key]) >= _cap:
                 flush_group(key)
             elif _eager_flush():
                 last_arrival = time.time()
