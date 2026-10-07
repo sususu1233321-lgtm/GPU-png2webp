@@ -1,0 +1,59 @@
+alpha_dec.c
+buffer_dec.c
+frame_dec.c
+idec_dec.c
+io_dec.c
+quant_dec.c
+tree_dec.c
+vp8_dec.c
+vp8l_dec.c
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(292): error C2001: 常量中有换行符
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(293): error C2001: 常量中有换行符
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(295): error C2143: 语法错误: 缺少“)”(在“goto”的前面)
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(292): warning C4473: “fprintf”: 没有为格式字符串传递足够的参数
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(292): note: 占位符和其参数预计 2 可变参数，但提供的却是 0 参数
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(292): note: 缺失的可变参数 1 为格式字符串“%d”所需
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(370): error C2001: 常量中有换行符
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(371): error C2001: 常量中有换行符
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(372): error C2146: 语法错误: 缺少“)”(在标识符“simple_code”的前面)
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(370): warning C4473: “fprintf”: 没有为格式字符串传递足够的参数
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(370): note: 占位符和其参数预计 5 可变参数，但提供的却是 0 参数
+..\..\vendor\libwebp-1.5.0\src\dec\vp8l_dec.c(370): note: 缺失的可变参数 1 为格式字符串“%d”所需
+webp_dec.c
+alpha_processing.c
+cpu.c
+dec.c
+dec_clip_tables.c
+filters.c
+lossless.c
+rescaler.c
+upsampling.c
+yuv.c
+alpha_processing_sse2.c
+正在生成代码...
+正在编译...
+alpha_processing_sse41.c
+dec_sse2.c
+dec_sse41.c
+filters_sse2.c
+lossless_sse2.c
+lossless_sse41.c
+rescaler_sse2.c
+upsampling_sse2.c
+upsampling_sse41.c
+yuv_sse2.c
+yuv_sse41.c
+bit_reader_utils.c
+color_cache_utils.c
+filters_utils.c
+huffman_utils.c
+quant_levels_dec_utils.c
+rescaler_utils.c
+random_utils.c
+thread_utils.c
+utils.c
+正在生成代码...
+正在编译...
+palette.c
+dwebp_main.c
+正在生成代码...

@@ -1,0 +1,56 @@
+cl: 命令行 warning D9024 :无法识别的源文件类型“
+”，假定为对象文件
+cl: 命令行 warning D9024 :无法识别的源文件类型“
+”，假定为对象文件
+cl: 命令行 warning D9024 :无法识别的源文件类型“
+”，假定为对象文件
+alpha_dec.c
+buffer_dec.c
+frame_dec.c
+idec_dec.c
+io_dec.c
+quant_dec.c
+tree_dec.c
+vp8_dec.c
+vp8l_dec.c
+webp_dec.c
+alpha_processing.c
+cpu.c
+dec.c
+dec_clip_tables.c
+filters.c
+lossless.c
+rescaler.c
+upsampling.c
+yuv.c
+bit_reader_utils.c
+正在生成代码...
+正在编译...
+color_cache_utils.c
+filters_utils.c
+huffman_utils.c
+quant_levels_dec_utils.c
+rescaler_utils.c
+random_utils.c
+thread_utils.c
+utils.c
+palette.c
+dwebp_main.c
+正在生成代码...
+alpha_processing.obj : error LNK2019: 无法解析的外部符号 WebPInitAlphaProcessingSSE2，函数 WebPInitAlphaProcessing 中引用了该符号
+alpha_processing.obj : error LNK2019: 无法解析的外部符号 WebPInitAlphaProcessingSSE41，函数 WebPInitAlphaProcessing 中引用了该符号
+dec.obj : error LNK2019: 无法解析的外部符号 VP8DspInitSSE2，函数 VP8DspInit_body 中引用了该符号
+dec.obj : error LNK2019: 无法解析的外部符号 VP8DspInitSSE41，函数 VP8DspInit_body 中引用了该符号
+filters.obj : error LNK2019: 无法解析的外部符号 VP8FiltersInitSSE2，函数 VP8FiltersInit 中引用了该符号
+lossless.obj : error LNK2019: 无法解析的外部符号 VP8LDspInitSSE2，函数 VP8LDspInit_body 中引用了该符号
+lossless.obj : error LNK2019: 无法解析的外部符号 VP8LDspInitSSE41，函数 VP8LDspInit_body 中引用了该符号
+rescaler.obj : error LNK2019: 无法解析的外部符号 WebPRescalerDspInitSSE2，函数 WebPRescalerDspInit 中引用了该符号
+upsampling.obj : error LNK2019: 无法解析的外部符号 WebPInitYUV444ConvertersSSE2，函数 WebPInitYUV444Converters 中引用了该符号
+upsampling.obj : error LNK2019: 无法解析的外部符号 WebPInitYUV444ConvertersSSE41，函数 WebPInitYUV444Converters 中引用了该符号
+upsampling.obj : error LNK2019: 无法解析的外部符号 WebPInitUpsamplersSSE2，函数 WebPGetLinePairConverter 中引用了该符号
+upsampling.obj : error LNK2019: 无法解析的外部符号 WebPInitUpsamplersSSE41，函数 WebPGetLinePairConverter 中引用了该符号
+yuv.obj : error LNK2019: 无法解析的外部符号 WebPInitSamplersSSE2，函数 WebPInitSamplers 中引用了该符号
+yuv.obj : error LNK2019: 无法解析的外部符号 WebPInitSamplersSSE41，函数 WebPInitSamplers 中引用了该符号
+yuv.obj : error LNK2019: 无法解析的外部符号 WebPInitConvertARGBToYUVSSE2，函数 WebPInitConvertARGBToYUV 中引用了该符号
+yuv.obj : error LNK2019: 无法解析的外部符号 WebPInitConvertARGBToYUVSSE41，函数 WebPInitConvertARGBToYUV 中引用了该符号
+dwebp.exe : fatal error LNK1120: 16 个无法解析的外部命令
