@@ -975,9 +975,53 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
         _dispatch_batch(group, W2, H2, y_dc, y_ac, uv_lv,
                         is_i4, i16m, uvm, i4m)
 
+    def _png_raw_size_py(h, w, bd, ct, inter):
+        """Python twin of the kernel's png_raw_size (raw scanline bytes)."""
+        C = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ct]
+        X0 = (0, 4, 0, 2, 0, 1, 0)
+        Y0 = (0, 0, 4, 0, 2, 0, 1)
+        DX = (8, 8, 4, 4, 2, 2, 1)
+        DY = (8, 8, 8, 4, 4, 2, 2)
+        tot = 0
+        for p in range(7 if inter else 1):
+            if inter:
+                wp = (w - X0[p] + DX[p] - 1) // DX[p]
+                hp = (h - Y0[p] + DY[p] - 1) // DY[p]
+            else:
+                wp, hp = w, h
+            if wp <= 0 or hp <= 0:
+                continue
+            rb = (wp * C * bd + 7) >> 3
+            tot += hp * (rb + 1)
+        return tot
+
+    _raw_cap = int(os.environ.get("PNG_RAWCAP") or 0) or (1 << 30)
+
+    def _png_chunk_group(group):
+        """Split a png group so cumulative fraw/compressed offsets stay
+        below the DLL's int32 offsets (1<<30 with headroom)."""
+        out, cur, acc = [], [], 0
+        for t in group:
+            h, w, bd, ct, inter = t["ihdr"]
+            per = max(_png_raw_size_py(h, w, bd, ct, inter),
+                      len(t["idat"])) + 65536
+            if cur and acc + per > _raw_cap:
+                out.append(cur)
+                cur, acc = [], 0
+            cur.append(t)
+            acc += per
+        if cur:
+            out.append(cur)
+        return out
+
     def _cpp_flush_png(group, H2, W2):
-        """GPU-decoded batch: zlib streams in, RGBA (for alpha encode + the
-        verify reference) comes back with the coefficients."""
+        """GPU-decoded batch: zlib streams in, decoded RGBA (for alpha encode +
+        the verify reference) comes back with the coefficients. The group is
+        chunked so cumulative raw offsets stay int32-safe."""
+        for chunk in _png_chunk_group(group):
+            _cpp_flush_png_one(chunk, H2, W2)
+
+    def _cpp_flush_png_one(group, H2, W2):
         n = len(group)
         mb_h, mb_w = H2 // 16, W2 // 16
         n_mb = mb_h * mb_w
@@ -1007,8 +1051,9 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             _ptr(y_dc), _ptr(y_ac), _ptr(uv_lv),
             _ptr(is_i4), _ptr(i16m), _ptr(uvm), _ptr(i4m),
             _ptr(sse), _ptr(ierr), _ptr(rgba),
-            _ptr(plte) if plte else P(0), len(plte) if plte else 0,
-            _ptr(trns256) if trns256 else P(0),
+            ctypes.cast(plte, P) if plte else P(0),
+            len(plte) if plte else 0,
+            ctypes.cast(trns256, P) if trns256 else P(0),
             len(trns256) if trns256 else 0,
             group[0]["trnsmode"])
         if rid <= 0:
@@ -1018,8 +1063,12 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
         _drain_pend(False)
 
     def _padded_flush_png(group, Hp, Wp):
-        """Mixed-size GPU-decoded batch on one shared padded grid: many
-        concurrent inflate streams regardless of individual image sizes."""
+        """Mixed-size GPU-decoded batch on one shared padded grid; chunked
+        so cumulative raw offsets stay int32-safe."""
+        for chunk in _png_chunk_group(group):
+            _padded_flush_png_one(chunk, Hp, Wp)
+
+    def _padded_flush_png_one(group, Hp, Wp):
         n = len(group)
         tot = sum((t["ihdr"][0] // 16) * (t["ihdr"][1] // 16) for t in group)
         y_dc = np.empty(tot * 16, np.int16)
@@ -1053,8 +1102,9 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             _ptr(y_dc), _ptr(y_ac), _ptr(uv_lv),
             _ptr(is_i4), _ptr(i16m), _ptr(uvm), _ptr(i4m),
             _ptr(sse), _ptr(ierr), _ptr(rgba),
-            _ptr(plte) if plte else P(0), len(plte) if plte else 0,
-            _ptr(trns256) if trns256 else P(0),
+            ctypes.cast(plte, P) if plte else P(0),
+            len(plte) if plte else 0,
+            ctypes.cast(trns256, P) if trns256 else P(0),
             len(trns256) if trns256 else 0,
             group[0]["trnsmode"])
         if rid <= 0:
@@ -1665,9 +1715,16 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                                    stats, progress_cb, log)
                     return None
                 meta = extract_meta_cpp(png_data) or extract_meta(png_data)
+                # variant identity: the DLL uploads ONE palette/tRNS set
+                # per batch, so images differing in tRNS/palette must not
+                # share a group even when (h, w, bd, ct, inter) match
+                import zlib as _zl
                 t = dict(rel=rel, out=out_path, png=png_data,
                          idat=idat_b, ihdr=(h, w, bd, ct, inter),
                          plte=plte, trns256=trns256, trnsmode=trnsmode,
+                         pvar=(trnsmode,
+                               _zl.crc32((plte or b"")
+                                         + (trns256 or b"")) & 0xFFFFFFFF),
                          src=path, meta=meta, size=len(png_data))
                 if h * w > 24_000_000:
                     _submit_fallback(t, f"超大尺寸 {w}x{h}")
@@ -1698,12 +1755,19 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             try:
                 import imagecodecs
                 arr = imagecodecs.png_decode(png_data)
-                if arr.ndim == 2:
-                    arr = np.stack([arr] * 3, -1)
-                if arr.shape[-1] == 3:
-                    arr = np.concatenate(
-                        [arr, np.full(arr.shape[:2] + (1,), 255, np.uint8)],
-                        -1)
+                if (arr.dtype != np.uint8
+                        or (arr.ndim == 3 and arr.shape[-1] == 2)):
+                    # 16-bit / gray+alpha: normalise with the GPU-path
+                    # semantics (>>8, GA->RGBA); the old concat silently
+                    # promoted uint16 and fed garbage to the encoder
+                    arr = _decode_png_cpu(png_data)
+                else:
+                    if arr.ndim == 2:
+                        arr = np.stack([arr] * 3, -1)
+                    if arr.shape[-1] == 3:
+                        arr = np.concatenate(
+                            [arr, np.full(arr.shape[:2] + (1,), 255,
+                                          np.uint8)], -1)
             except Exception:                       # noqa: BLE001
                 img = Image.open(io.BytesIO(png_data))
                 if img.mode not in ("RGB", "RGBA"):
@@ -1711,12 +1775,16 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                         "RGBA" if "A" in img.getbands()
                         or "transparency" in img.info else "RGB")
                 arr = np.asarray(img)
-                if arr.ndim == 2:
-                    arr = np.stack([arr] * 3, -1)
-                if arr.shape[-1] == 3:
-                    arr = np.concatenate(
-                        [arr, np.full(arr.shape[:2] + (1,), 255, np.uint8)],
-                        -1)
+                if (arr.dtype != np.uint8
+                        or (arr.ndim == 3 and arr.shape[-1] == 2)):
+                    arr = _decode_png_cpu(png_data)
+                else:
+                    if arr.ndim == 2:
+                        arr = np.stack([arr] * 3, -1)
+                    if arr.shape[-1] == 3:
+                        arr = np.concatenate(
+                            [arr, np.full(arr.shape[:2] + (1,), 255,
+                                          np.uint8)], -1)
             meta = extract_meta_cpp(png_data)
             if meta is None:
                 meta = extract_meta(png_data)
@@ -2051,10 +2119,11 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                 # one padded grid keyed on (Hp, Wp, variant)
                 h, w, bd, ct, inter = t["ihdr"]
                 pg = t.get("padgrid")
+                tail = (bd, ct, inter) + t.get("pvar", ())
                 if pg is not None:
-                    key = ("pngpad", pg[1], pg[2], bd, ct, inter)
+                    key = ("pngpad", pg[1], pg[2]) + tail
                 else:
-                    key = ("png", h, w, bd, ct, inter)
+                    key = ("png", h, w) + tail
             else:
                 shape = t["arr"].shape[:2]
                 if "odd_wh" in t:
