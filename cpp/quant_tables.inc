@@ -58,9 +58,16 @@ static void setup_quant_exact(int quality, QuantTables* qt) {
     long long sum2 = 0;
     for (int i = 0; i < 16; i++) sum2 += qt->y2q[i];
     long long q2avg = (sum2 + 8) >> 4;
-    // libwebp SetupMatrices lambdas (quant_enc.c) for trellis RDO
-    qt->lam_i4 = (7 * qt->y1_qavg * qt->y1_qavg) >> 3;
+    // libwebp SetupMatrices lambdas (quant_enc.c) for trellis RDO;
+    // TRE_LAM scales both for RD-curve experiments / per-content tuning
+    // (optimal lambda = |dD/dR| at the operating point, Shoham-Gersho /
+    // HEVC R-lambda model — the q^2 form is a corpus-average fit)
+    double _ls = 1.0;
+    const char* _le = getenv("TRE_LAM");
+    if (_le) _ls = atof(_le);
+    if (_ls <= 0) _ls = 1.0;
+    qt->lam_i4 = (long long)((7.0 * qt->y1_qavg * qt->y1_qavg / 8.0) * _ls);
     if (qt->lam_i4 < 1) qt->lam_i4 = 1;
-    qt->lam_i16 = (q2avg * q2avg) >> 2;
+    qt->lam_i16 = (long long)((double)(q2avg * q2avg >> 2) * _ls);
     if (qt->lam_i16 < 1) qt->lam_i16 = 1;
 }
