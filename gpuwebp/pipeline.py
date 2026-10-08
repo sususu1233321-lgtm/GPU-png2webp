@@ -1704,8 +1704,10 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                      trnsmode) = png_idat_scan(png_data)
                 except PngScanError as e:
                     raise ValueError(f"PNG块扫描失败: {e}")
-                if h % 16 or w % 16:
-                    # 奇数/非16倍尺寸走 CPU 旧路径(桶/odd 语义, 罕见)
+                if (h % 16 or w % 16
+                        or (trnsmode in (2, 3) and bd == 16)):
+                    # 奇数/非16倍尺寸, 以及16位色键tRNS(libpng按完整16位
+                    # 精确匹配, GPU路径只比较高8位 -> 语义不同)走 CPU 路径
                     arr = _decode_png_cpu(png_data)
                     meta = extract_meta_cpp(png_data) or extract_meta(
                         png_data)

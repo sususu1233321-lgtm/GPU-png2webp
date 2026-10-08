@@ -1025,7 +1025,7 @@ static int stage1_v2(Req3* r, struct DevCache* bs) {
         int total = (int)nmb_all;
         int threads = 128;
         int blocks = (total + threads - 1) / threads;
-        mode_search_kernel<<<blocks, threads, 0, bs->stream>>>(
+        mode_search_kernel<<<blocks, threads>>>(
             (const short*)bs->bY.p, (const short*)bs->bU.p, (const short*)bs->bV.p,
             bs->fc_i16, bs->fc_uv,
             (unsigned char*)bs->i16m.p, (long long*)bs->i16score.p,
@@ -1111,7 +1111,7 @@ static int stage23_v2(Req3* r, struct DevCache* bs) {
 
     // ---- closed loop ----
     {
-        closed_loop_kernel<<<(n * mb_h + 32 - 1) / 32, 32, 0, bs->stream>>>(
+        closed_loop_kernel<<<(n * mb_h + 32 - 1) / 32, 32>>>(
             (const short*)bs->Y.p, (const short*)bs->U.p, (const short*)bs->V.p,
             (const unsigned char*)bs->is_i4.p, (const unsigned char*)bs->i16m.p,
             (const unsigned char*)bs->uvm.p, (const unsigned char*)bs->i4m.p,
