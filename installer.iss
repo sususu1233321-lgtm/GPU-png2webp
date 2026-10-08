@@ -2,7 +2,7 @@
 ; 构建: C:\InnoSetup\ISCC.exe installer.iss
 
 #define AppName "GPU压图"
-#define AppVersion "1.0"
+#define AppVersion "2.1"
 #define AppPublisher "GPU压图"
 #define AppExe "GPU压图.exe"
 
