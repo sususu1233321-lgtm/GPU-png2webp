@@ -1,3 +1,7 @@
+// per-batch trellis lambda scale, set from Python per image-bucket
+// (R-lambda closed loop); TRE_LAM env still overrides (experiments)
+static double g_lam_scale = 1.0;
+
 // Exact quantization tables generated from gpuwebp/vp8_tables.py
 // and setup_quant logic ported from gpuwebp/vp8_encode.py
 
@@ -62,7 +66,7 @@ static void setup_quant_exact(int quality, QuantTables* qt) {
     // TRE_LAM scales both for RD-curve experiments / per-content tuning
     // (optimal lambda = |dD/dR| at the operating point, Shoham-Gersho /
     // HEVC R-lambda model — the q^2 form is a corpus-average fit)
-    double _ls = 1.0;
+    double _ls = g_lam_scale;
     const char* _le = getenv("TRE_LAM");
     if (_le) _ls = atof(_le);
     if (_ls <= 0) _ls = 1.0;

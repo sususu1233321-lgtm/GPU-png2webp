@@ -1303,6 +1303,20 @@ int gpu_warm(int n, int W, int H)
     return grow_shape(&S2[1], n, W, H);
 }
 
+// per-batch lambda scale for the R-lambda closed loop: invalidates the
+// cached quant/lam upload so the next batch re-uploads with new lambdas
+extern "C" __declspec(dllexport)
+int set_trellis_lam_scale(double s)
+{
+    if (s <= 0 || s > 64) return -1;
+    g_lam_scale = s;
+    std::lock_guard<std::mutex> lk(g3_mu);
+    S2[0].q_quality = -1;
+    S2[1].q_quality = -1;
+    g.q_quality = -1;
+    return 0;
+}
+
 extern "C" __declspec(dllexport)
 int set_trellis(int on)
 {

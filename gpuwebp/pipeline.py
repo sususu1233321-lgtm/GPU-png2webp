@@ -671,6 +671,13 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     except AttributeError:
                         pass
                     try:
+                        # R-lambda closed loop: per-batch lambda scale
+                        _cpp.set_trellis_lam_scale.restype = ctypes.c_int
+                        _cpp.set_trellis_lam_scale.argtypes = [
+                            ctypes.c_double]
+                    except AttributeError:
+                        pass
+                    try:
                         # trellis RD quantization (default on; TRELLIS=0 off)
                         _cpp.set_trellis.restype = ctypes.c_int
                         _cpp.set_trellis.argtypes = [ctypes.c_int]
@@ -815,6 +822,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             for k, t in enumerate(group):
                 if stop_event is not None and stop_event.is_set():
                     return
+                if "_rl_lam" in t and "_rl_pass2" not in t:
+                    continue        # R-lambda pass-1: re-encode pending
                 p0 = int(lens[k]); tot = int(lens[n + k])
                 hw = hdr_w if hdr_w is not None else W2
                 hh = hdr_h if hdr_h is not None else H2
@@ -1115,6 +1124,69 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             print(f"[PP2] queued rid={rid}", flush=True)
         _drain_pend(False)
 
+    _rl_backlog = []
+
+    def _rl(group, W2, H2, sse, base):
+        """R-lambda pass-1 hook (Shoham-Gersho / HEVC R-lambda): mark
+        images whose GPU recon PSNR sits above the TRE_AUTO target for a
+        second encode with lambda = exp((PSNR-target)/elasticity). Marked
+        tasks are excluded from THIS dispatch's finish and stashed in the
+        backlog; the gpu worker drains it (same thread => scale race-free)
+        bucketed by (lambda, shape) through the normal flush_group routing.
+        """
+        for i, t in enumerate(group):
+            if (t.get("_gate_fail") or "_rl_done" in t
+                    or t.get("_gate_fail")):
+                continue
+            h2, w2 = t["arr"].shape[:2]
+            gp = _gpu_psnr(sse[base + 3 * i: base + 3 * i + 3], h2, w2)
+            if gp > _tre_auto + 0.15:
+                t["_rl_lam"] = min(8.0, pow(2.718281828459045,
+                                            (gp - _tre_auto) / 1.15))
+                t["_rl_done"] = True
+                _rl_backlog.append(t)
+                with stats.lock:
+                    _tre_calls[0] += 1
+
+    def _rl_group_key(t):
+        if "idat" in t:
+            if "padgrid" in t:
+                return ("pngpad", t["padgrid"][1], t["padgrid"][2],
+                        ) + t["ihdr"][2:] + t.get("pvar", ())
+            h, w, bd, ct, inter = t["ihdr"]
+            return ("png", h, w, bd, ct, inter) + t.get("pvar", ())
+        shape = t["arr"].shape[:2]
+        if "odd_wh" in t:
+            return ("odd",) + shape
+        return _real_bucket.get(shape) or shape
+
+    def _rl_drain():
+        if not _rl_backlog:
+            return
+        while _pend:
+            _drain_pend(True)
+        buckets = {}
+        for t in _rl_backlog:
+            b = round(pow(t["_rl_lam"], 0.5), 2)
+            buckets.setdefault((b, _rl_group_key(t)), []).append(t)
+        _rl_backlog.clear()
+        for (b, key) in sorted(buckets, key=lambda k: (k[0], str(k[1]))):
+            ts = buckets[(b, key)]
+            for t in ts:
+                t["_rl_pass2"] = True
+            _cpp.set_trellis_lam_scale(b * b)
+            try:
+                groups.setdefault(key, []).extend(ts)
+                flush_group(key)
+            except Exception as e:                  # noqa: BLE001
+                log(f"R-lambda二遍异常({len(ts)}张): {e}")
+                for t in ts:
+                    _submit_fallback(t, f"R-lambda二遍异常 {e}")
+            finally:
+                _cpp.set_trellis_lam_scale(1.0)
+        while _pend:
+            _drain_pend(True)
+
     def _dispatch_batch(group, W2, H2, y_dc, y_ac, uv_lv,
                         is_i4, i16m, uvm, i4m, sse=None, base=0,
                         png_rgba=None, png_ierr=None):
@@ -1151,6 +1223,9 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     log(f"GPU重建PSNR {gp:.2f} < {_gpu_psnr_min} "
                         f"{t['rel']}，CPU兜底")
                     t["_gate_fail"] = f"GPU重建PSNR {gp:.2f} < {_gpu_psnr_min}"
+        # ---- R-lambda closed loop pass ----
+        if _tre_auto and sse is not None and "_rl_done" not in group[0]:
+            _rl(group, W2, H2, sse, base)
         sampled = [(_is_sampled(t["rel"]) if _sample_pct < 100 else True)
                    for t in group]
         if _verify_sem is not None:
@@ -1159,7 +1234,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             # the result callbacks; without a cap the whole corpus (~37GB)
             # piles up whenever the pool lags the encoder
             for _s, _t in zip(sampled, group):
-                if _s and "_gate_fail" not in _t:
+                if (_s and "_gate_fail" not in _t
+                        and not ("_rl_lam" in _t and "_rl_pass2" not in _t)):
                     _verify_sem.acquire()
         if _entb is not None:
             _fin_sem.acquire()          # bounds pinned batch arrays (~230MB ea)
@@ -1176,6 +1252,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             for i, t in enumerate(group):
                 if stop_event is not None and stop_event.is_set():
                     return
+                if "_rl_lam" in t and "_rl_pass2" not in t:
+                    continue        # R-lambda pass-1: re-encode pending
                 sl = slice(i * n_mb, (i + 1) * n_mb)
                 modes = dict(is_i4=is_i4[sl].astype(bool), i16_mode=i16m[sl],
                              uv_mode=uvm[sl],
@@ -1338,8 +1416,17 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             return f"PSNR {p:.2f} < {min_psnr}"
         return None
 
+    _fc_lock = threading.Lock()
+
     def finish_common(task, webp, used_fallback, reason):
         rel, out_path = task["rel"], task["out"]
+        # once-guard: R-lambda pass-2 tasks can reach finish twice when a
+        # padded-bucket re-flush lands in both the exact-shape fallback and
+        # the pass-2 bucket; the outputs are identical, so first writer wins
+        with _fc_lock:
+            if task.get("_fc_done"):
+                return
+            task["_fc_done"] = True
         if out_path:
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
             with open(out_path, "wb") as f:
@@ -1434,6 +1521,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
 
     def finish_gpu_pre(task, vp8, sampled=True):
         try:
+            if "_rl_lam" in task and "_rl_pass2" not in task:
+                return        # R-lambda pass-1: re-encode pending
             if "odd_wh" in task:
                 _oh, _ow = task.pop("odd_wh")
                 task["arr"] = np.ascontiguousarray(
@@ -1489,6 +1578,9 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
 
     def finish_gpu(task, modes, y_dc, y_ac, uv_lv, sampled=True):
         try:
+            if "_rl_lam" in task and "_rl_pass2" not in task:
+                return        # R-lambda pass-1: re-encode pending
+        
             if "odd_wh" in task:
                 _oh, _ow = task.pop("odd_wh")
                 task["arr"] = np.ascontiguousarray(
@@ -2003,6 +2095,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
         for i, t in enumerate(stage["group"]):
             if stop_event is not None and stop_event.is_set():
                 return
+            if "_rl_lam" in t and "_rl_pass2" not in t:
+                continue        # R-lambda pass-1: re-encode pending
             finish_ex.submit(finish_gpu, t, modes_list[i],
                              y_dc[i], y_ac[i], uv_lv[i])
         del stage  # release GPU plane refs so pool can reclaim
@@ -2062,6 +2156,13 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
     _eager_min = int(_em) if _em is not None else 24
     _pb = os.environ.get("PNG_BATCH")
     _png_batch = int(_pb) if _pb is not None else 192
+    # R-lambda closed loop (TRE_AUTO=47.0): images whose first-pass GPU
+    # recon PSNR exceeds the target get re-encoded with a higher trellis
+    # lambda (exp law, elasticity ~0.95dB/ln(lambda), measured on corpus);
+    # keep whichever output is smaller. lambda floor 1.0 = never worse.
+    _ta = os.environ.get("TRE_AUTO")
+    _tre_auto = float(_ta) if _ta else 0.0
+    _tre_calls = [0, 0]        # [re-encoded, accepted-smaller]
 
     def _eager_flush():
         """Flush the biggest partial group when the GPU would idle anyway."""
@@ -2081,6 +2182,9 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             except _queue.Empty:
                 if _pend:
                     _drain_pend(True)      # wait for an in-flight batch
+                if _tre_auto and _rl_backlog and not _pend:
+                    _rl_drain()
+                    continue
                 if decode_done.is_set() and gpu_q.empty():
                     break
                 if _eager_flush():
@@ -2148,6 +2252,8 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             flush_group(key)
         # drain the async GPU pipeline completely before finishing
         _drain_pend(True)
+        if _tre_auto:
+            _rl_drain()
         # process the final pipelined batch (no next batch to overlap with)
         if _prev_stage[0] is not None:
             try:
