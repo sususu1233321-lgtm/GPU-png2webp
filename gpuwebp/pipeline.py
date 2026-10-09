@@ -1739,14 +1739,36 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
             return
         if H % 2 or W % 2:
             Hp, Wp = H + (H & 1), W + (W & 1)
-            pad = np.empty((Hp, Wp, 4), arr.dtype)
+            pad = np.zeros((Hp, Wp, 4), arr.dtype)
             pad[:H, :W] = arr
             if Wp != W:
-                pad[:, W:] = pad[:, W:W + 1]
+                pad[:H, W:] = arr[:, W - 1:W]
             if Hp != H:
-                pad[H:] = pad[H:H + 1]
+                pad[H:] = pad[H - 1:H].copy()
             t["arr"] = np.ascontiguousarray(pad)
             t["odd_wh"] = (H, W)
+            if os.environ.get("PAD_CHK"):
+                import hashlib as _hp
+                global _PAD_N
+                _PAD_N = globals().get("_PAD_N", 0) + 1
+                import sys
+                print(f"PADDBG H={H} W={W} Hp={Hp} Wp={Wp} "
+                      f"arr={arr.shape} pad_col14={pad[0,14].tolist()} "
+                      f"pad_col15={pad[0,15].tolist()}",
+                      file=sys.stderr, flush=True)
+                _ph = _hp.md5(t["arr"].tobytes()).hexdigest()
+                _ok = (np.array_equal(t["arr"][:15, 15],
+                                       t["arr"][:15, 14])
+                       and np.array_equal(t["arr"][15],
+                                          t["arr"][14]))
+                with open(os.environ["PAD_CHK"], "a") as _fp:
+                    _fp.write(f"padded#{_PAD_N} {_ph} rel={rel}"
+                              f" padOK={_ok}" + chr(10))
+                    if not _ok:
+                        _fp.write(f"  pad[:,15][:5]={t['arr'][:5,15].tolist()}"
+                                  + chr(10))
+                        _fp.write(f"  pad[:,14][:5]={t['arr'][:5,14].tolist()}"
+                                  + chr(10))
         gpu_q.put(t)
         if "odd_wh" not in t:
             bk = _real_bucket.get((H, W))
@@ -1798,9 +1820,12 @@ def run_batch_files_fast(files, dst, base=None, quality=90, device=1,
                     raise ValueError(f"PNG块扫描失败: {e}")
                 if (h % 16 or w % 16
                         or (trnsmode in (2, 3) and bd == 16)):
-                    # 奇数/非16倍尺寸, 以及16位色键tRNS(libpng按完整16位
-                    # 精确匹配, GPU路径只比较高8位 -> 语义不同)走 CPU 路径
                     arr = _decode_png_cpu(png_data)
+                    if os.environ.get("DEC_CHK"):
+                        import hashlib as _hd
+                        _dh = _hd.md5(arr.tobytes()).hexdigest()
+                        with open(os.environ["DEC_CHK"], "a") as _fd:
+                            _fd.write("dec " + _dh + chr(10))
                     meta = extract_meta_cpp(png_data) or extract_meta(
                         png_data)
                     t = dict(rel=rel, out=out_path, png=png_data, arr=arr,
